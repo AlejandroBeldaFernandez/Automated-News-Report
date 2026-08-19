@@ -1,1 +1,5 @@
 .venv
+report_preview.png
+report.pdf
+news.db
+__pycache__
