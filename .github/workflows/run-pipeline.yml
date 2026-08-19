@@ -1,0 +1,41 @@
+name: Run news report pipeline
+
+on:
+  # Manual trigger only: run from the Actions tab ("Run workflow") or with
+  # `gh workflow run run-pipeline.yml`. Deliberately NOT scheduled — running
+  # every day automatically was ruled out for this project.
+  workflow_dispatch:
+
+  # This is how a daily run would be set up, kept here as reference and
+  # intentionally left disabled:
+  # schedule:
+  #   - cron: '0 7 * * *'  # every day at 07:00 UTC
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t automated-news-report:latest .
+
+      - name: Run pipeline inside the container
+        run: docker run --name news-report automated-news-report:latest
+
+      - name: Copy the generated report out of the container
+        run: docker cp news-report:/app/report.pdf ./report.pdf
+
+      - name: Upload report as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-report
+          path: report.pdf
+
+      - name: Log in to DockerHub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Push image to DockerHub
+        run: |
+          docker tag automated-news-report:latest ${{ secrets.DOCKERHUB_USERNAME }}/automated-news-report:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/automated-news-report:latest

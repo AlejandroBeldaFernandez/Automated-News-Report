@@ -1,0 +1,9 @@
+numpy==2.5.2
+pandas==3.0.5
+playwright==1.62.0
+prefect==3.8.3
+pymupdf==1.28.2
+reportlab==5.0.0
+requests==2.34.2
+torch==2.13.0
+transformers==5.15.0

@@ -1,0 +1,7 @@
+.venv
+__pycache__
+.git
+news.db
+report.pdf
+report_preview.png
+Automated_news_report.ipynb

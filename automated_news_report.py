@@ -19,7 +19,6 @@ import sqlite3
 # Jupyter already runs its own asyncio event loop, and Playwright's
 # sync API (sync_playwright) is incompatible with that inside a notebook
 # (it works fine in a plain terminal script, just not here).
-import playwright
 from playwright.async_api import async_playwright
 
 # Local LLM for summarization: tokenizer + causal language model, run on CPU.
@@ -32,8 +31,6 @@ import torch
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-import pymupdf
-from IPython.display import Image
 from prefect import flow, task
 import asyncio
 
