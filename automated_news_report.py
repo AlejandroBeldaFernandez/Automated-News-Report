@@ -33,6 +33,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from prefect import flow, task
 import asyncio
+import json
 
 SEED = 123
 np.random.seed(SEED)
@@ -48,7 +49,7 @@ def get_sitemaps():
     return urls, dicc
 
 @task 
-def buiding_list(urls, dicc):
+def buiding_list(urls, dicc, hours_limit):
     news = []
     for item in urls:
         url = item.find("sitemaps:loc", dicc).text
@@ -59,7 +60,7 @@ def buiding_list(urls, dicc):
 
         # Recency filter: skip anything older than 48h (see markdown above,
         # the sitemap itself is not pre-filtered by RTVE).
-        if (actual_date -  publishet_at_correct) > timedelta(hours=48):
+        if (actual_date -  publishet_at_correct) > timedelta(hours=hours_limit):
             continue
 
         # section (e.g. "noticias", "deportes") is the 4th path segment.
@@ -84,11 +85,11 @@ def buiding_list(urls, dicc):
 def create_database(news):
     conn = sqlite3.connect("news.db")
     cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS News (Url varchar(255) PRIMARY KEY NOT NULL, Rtve_id INTEGER , Title varchar(255) NOT NULL, Section varchar(255), Published_at varchar(255) NOT NULL, Discovered_at varchar(255) NOT NULL, Body varchar(255), Short_Description varchar(255), Scrapped_at varchar(255), Source varchar NOT NULL DEFAULT 'RTVE')")
+    cur.execute("CREATE TABLE IF NOT EXISTS News (Url varchar(255) PRIMARY KEY NOT NULL, Rtve_id INTEGER , Title varchar(255) NOT NULL, Section varchar(255), Published_at varchar(255) NOT NULL, Discovered_at varchar(255) NOT NULL, Body varchar(255), Short_Description varchar(255), Scrapped_at varchar(255), Source varchar(255) NOT NULL DEFAULT 'RTVE', Category varchar(255) NOT NULL DEFAULT 'News')")
     tuples = []
     for new in news:
-        tuples.append((new['url'], new['rtve_id'], new['title'], new['section'], new['published_at'], new['discovered_at'], None, None, None, 'RTVE'))
-    cur.executemany("INSERT OR IGNORE INTO News VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tuples)
+        tuples.append((new['url'], new['rtve_id'], new['title'], new['section'], new['published_at'], new['discovered_at'], None, None, None, 'RTVE', 'News'))
+    cur.executemany("INSERT OR IGNORE INTO News VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tuples)
     conn.commit()
     conn.close()
     
@@ -105,17 +106,20 @@ async def scrapping_article_body(news):
                 await page.goto(item["url"], timeout=30000)
                 body = await page.inner_text(".artBody")
                 short_description = await page.get_attribute('meta[name="description"]', "content")
+                category_json = await page.get_attribute("article.mark.article", "data-category")
+                category = json.loads(category_json)["name"]
             except Exception as e:
                 # Defensive: one bad article must not stop the whole batch.
                 print("Fail in", item["url"], ":", e)
                 body = None
                 short_description = None
+                category = 'News'
             await page.close()
 
             scraped_at = datetime.now(timezone.utc).isoformat()
             cur.execute(
-                "UPDATE News SET Body = ?, Short_Description = ?, Scrapped_at = ? WHERE Url = ?",
-                (body, short_description, scraped_at, item["url"])
+                "UPDATE News SET Body = ?, Short_Description = ?, Scrapped_at = ?, Category = ? WHERE Url = ?",
+                (body, short_description, scraped_at, category, item["url"])
             )
         
         await browser.close()
@@ -134,11 +138,15 @@ async def scrapping_article_body(news):
     conn.close()
 
 @task
-def relevant_news():
+def relevant_news(number_news, category):
     conn = sqlite3.connect("news.db")
     cur = conn.cursor()
-    cur.execute("SELECT Title, Body, Url, Short_Description, Published_at, Source FROM News WHERE Section='noticias' ORDER BY Published_at DESC LIMIT 10")
+    if category:
+        cur.execute("SELECT Title, Body, Url, Short_Description, Published_at, Source, Category FROM News WHERE Section='noticias' AND Category= ?  ORDER BY Published_at DESC LIMIT ?", (category, number_news))
+    else: 
+        cur.execute("SELECT Title, Body, Url, Short_Description, Published_at, Source, Category FROM News WHERE Section='noticias' ORDER BY Published_at DESC LIMIT ?", (number_news,))
     news = cur.fetchall()
+
     conn.close()
     return news
 
@@ -182,7 +190,7 @@ def text_model(news):
     reports_entry = []
     for new in news:
         summary = answer(new[0], new[1], new[3])
-        report_entry = {"title": new[0], "summary": summary, "source": new[-1], "url": new[2]}
+        report_entry = {"title": new[0], "summary": summary, "source": new[-2], "url": new[2], "category": new[-1]}
         reports_entry.append(report_entry)
     return reports_entry
 
@@ -194,6 +202,7 @@ def report(reports_entry):
     story = [title, Spacer(1, 20), PageBreak()]
     for report_entry in reports_entry:
         story.append(Paragraph(report_entry["title"], styles["Heading2"]))
+        story.append(Paragraph(report_entry["category"], styles["Heading3"]))
         story.append(Paragraph(report_entry["summary"], styles["Normal"]))
         cite = f'Source: {report_entry["source"]} — <a href="{report_entry["url"]}">{report_entry["url"]}</a>'
         story.append(Paragraph(cite, styles["Normal"]))
@@ -202,14 +211,17 @@ def report(reports_entry):
     
     
 @flow
-async def main():
+async def main(number_news=10, hours_limit=48, category=None):
     urls, dicc = get_sitemaps()
-    news   = buiding_list(urls, dicc)
+    news   = buiding_list(urls, dicc, hours_limit)
     create_database(news)
     await scrapping_article_body(news)
-    news_relevant = relevant_news()
+    news_relevant = relevant_news(number_news, category)
     reports_entry = text_model(news_relevant)
     report(reports_entry)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    number_news = 10
+    hours_limit = 48
+    category = None
+    asyncio.run(main(number_news, hours_limit, category))
